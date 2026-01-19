@@ -643,7 +643,7 @@ def main():
 
 
 if __name__ == "__main__":
-    #main()
-    display_employees()
-    display_attendance() 
+    main()
+    # display_employees()
+    # display_attendance() 
   #  delete_all_records()

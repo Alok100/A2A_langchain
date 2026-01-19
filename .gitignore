@@ -1,0 +1,21 @@
+# macOS metadata files (AppleDouble files)
+._*
+
+# Python
+*.pyc
+__pycache__/
+.ruff_cache/
+.venv/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.development
+.env.test
+.env.production
+
+# IDE
+.vscode/
