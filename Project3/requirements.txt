@@ -1,0 +1,22 @@
+# Same core as Project2 (MCP + LangGraph)
+langgraph>=0.0.1
+langchain>=0.1.0
+langchain-ollama>=0.1.0
+langchain-core>=0.1.0
+langsmith>=0.1.0
+python-dotenv>=1.0.0
+psycopg2-binary>=2.9.0
+typing-extensions>=4.5.0
+
+# POC data generation (HR PDFs + timesheet Excel)
+reportlab>=4.0.0
+openpyxl>=3.1.0
+
+# Azure PostgreSQL MCP (same as Project2)
+azure-identity>=1.21.0
+azure-mgmt-postgresqlflexibleservers>=1.1.0
+psycopg[binary]>=3.2.6
+mcp[cli]>=1.6.0
+
+# Local graph PNG rendering (fallback when mermaid.ink is unreachable)
+pyppeteer>=1.0.2
