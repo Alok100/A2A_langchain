@@ -15,57 +15,6 @@ import config  # noqa: F401 - load .env and LangSmith
 from mcp_client import MCPClient
 from HelpServiceState import run_help_service
 
-LAST_FLOW_FILE = os.path.join(SCRIPT_DIR, "last_flow.txt")
-FLOW_HISTORY_FILE = os.path.join(SCRIPT_DIR, "flow_history.json")
-
-
-def _reset_session_for_new_run():
-    """Clear session files and path diagram so each CLI run starts fresh."""
-    for path in (LAST_FLOW_FILE, FLOW_HISTORY_FILE):
-        try:
-            if os.path.isfile(path):
-                os.remove(path)
-        except Exception:
-            pass
-    try:
-        from VisualizeGraph import write_empty_session_html
-        write_empty_session_html(silent=True)
-    except Exception:
-        pass
-
-
-def _save_last_flow(execution_path):
-    """Write execution path to file so path diagram / highlights can use it."""
-    try:
-        with open(LAST_FLOW_FILE, "w", encoding="utf-8") as f:
-            f.write("\n".join(execution_path))
-    except Exception:
-        pass
-
-
-def _append_flow_history(question, execution_path):
-    """Append question + execution path to flow_history.json for HTML diagram."""
-    import json
-    try:
-        history = []
-        if os.path.isfile(FLOW_HISTORY_FILE):
-            with open(FLOW_HISTORY_FILE, "r", encoding="utf-8") as f:
-                history = json.load(f)
-        history.append({"question": question, "path": execution_path})
-        with open(FLOW_HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(history, f, indent=2)
-    except Exception:
-        pass
-
-
-def _update_path_diagram_html():
-    """Update path_diagram.html with current flow history (question + flow per turn)."""
-    try:
-        from VisualizeGraph import write_path_diagram_html
-        write_path_diagram_html(silent=True)
-    except Exception:
-        pass
-
 
 def login():
     """Prompt for email and password; return (user_email, admin_rights) or (None, False)."""
@@ -89,8 +38,7 @@ def login():
 
 def main():
     while True:
-        # Fresh session: clear screen and reset session files (flows, history, path diagram)
-        _reset_session_for_new_run()
+        # Fresh session: clear screen
         os.system("cls" if os.name == "nt" else "clear")
 
         print("=" * 60)
@@ -122,7 +70,6 @@ def main():
                 print("Goodbye.")
                 return
             if user_input.lower() in ("logout", "log out", "signout", "sign out"):
-                _reset_session_for_new_run()
                 os.system("cls" if os.name == "nt" else "clear")
                 print("Logged out. You can log in again.")
                 print()
@@ -151,9 +98,6 @@ def main():
                 if execution_path:
                     flow_str = " → ".join(execution_path)
                     print("\n[Flow used]", flow_str)
-                    _save_last_flow(execution_path)
-                    _append_flow_history(user_input, execution_path)
-                    _update_path_diagram_html()
                 print()
             except Exception as e:
                 print(f"\nError: {e}\n")

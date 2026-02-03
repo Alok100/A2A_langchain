@@ -1,5 +1,0 @@
-validate_user
-classify_issue
-handle_update
-verify_update
-format_response

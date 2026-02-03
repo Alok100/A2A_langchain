@@ -7,6 +7,12 @@ from langchain_core.messages import HumanMessage
 
 from mcp_client import MCPClient
 
+# Policy documents for RAG (single-doc retrieval; only the selected doc is loaded)
+try:
+    from poc_data.hr_rules_content import POLICIES as HR_POLICIES
+except Exception:
+    HR_POLICIES = {}
+
 mcp_client = MCPClient()
 
 llm = ChatOllama(
@@ -23,7 +29,7 @@ class HelpServiceState(TypedDict):
     admin_rights: bool
     user_message: str
     issue_category: Optional[Literal[
-        "query_employee", "query_attendance", "update_leave", "update_attendance", "complex_report"
+        "query_employee", "query_attendance", "update_leave", "update_attendance", "complex_report", "query_policy"
     ]]
     query_target: Optional[Literal["self", "other"]]  # self = logged-in user only, other = another employee
     context_employee_name: Optional[str]  # employee from previous message (for "her", "his", "that employee")
@@ -82,10 +88,11 @@ Context (employee from previous message, if any): {context_str}
 
 Categories:
 - query_employee: Get employee info (own or another person)
-- query_attendance: Get attendance records (own or another person)
+- query_attendance: Get attendance *records* (show my/someone's actual clock-in/out, dates, history). NOT for "what does the policy say?" or "what is the default?"
 - update_leave: Update leave days
 - update_attendance: Add/update attendance
 - complex_report: Analytics/aggregations
+- query_policy: Questions about what the *policy or rules say* (defaults, guidelines, rules). Examples: "what is the default check-in?", "what does the attendance policy say?", "what are the leave rules?", "policy on expense?", "grievance process?". Use this when the user asks about policy/rules/defaults, not when they want to see their own or someone's actual data.
 
 For query_employee and query_attendance, also set "target":
 - "self": question is about the logged-in user (my join date, my attendance, etc.)
@@ -96,6 +103,8 @@ For update_leave and update_attendance, also set "target":
 - "other": update another employee (e.g. "set Sarah's leave to 15", "mark attendance for John"). When "other", include in params: employee_name and/or employee_email, plus leave_days/date/check_in/check_out as needed.
 IMPORTANT: If the user says "her", "his", "their", "that employee", "the same person", "that person", "them" and Context above is not "None", they mean that context employee. Set target to "other" and include employee_name in params. If Context is "Multiple: A, B, C" and the user did not specify which one, use employee_name: the first name or a short form (the system will ask which one).
 When multiple employees match, the user can specify by full name or Employee ID (6-digit, e.g. 100001). Include employee_id or company_id (numeric) in params when mentioned (e.g. "employee 100001", "ID 100001").
+
+Rule: "What is the default check-in?", "what does the policy say about X?", "what are the rules for Y?" → query_policy (answer from policy doc). "Show my attendance", "when did I check in last week?" → query_attendance (fetch records).
 
 Output format:
 {{"category": "...", "target": "self" or "other", "params": {{"key": "value"}}}}"""
@@ -141,6 +150,8 @@ def route_issue(state: HelpServiceState) -> str:
     if category == "complex_report" and not state.get("admin_rights"):
         state["error_message"] = "Access denied. Complex reports and analytics are for HR only."
         return "format_response"
+    if category == "query_policy":
+        return "rag_policy"
     return "handle_complex"
 
 
@@ -402,6 +413,52 @@ def verify_update(state: HelpServiceState) -> HelpServiceState:
     return state
 
 
+def rag_policy(state: HelpServiceState) -> HelpServiceState:
+    """Answer policy/rules questions using only the one relevant document (no full corpus)."""
+    if not HR_POLICIES:
+        state["error_message"] = "Policy documents are not available."
+        return state
+    state["llm_calls"] = state.get("llm_calls", 0) + 1
+    policy_names = list(HR_POLICIES.keys())
+    prompt_select = f"""The user is asking about HR policy or rules. Which single policy document is relevant?
+Policy options (use exactly one of these keys): {json.dumps(policy_names)}
+
+User request: {state['user_message']}
+
+Output only JSON: {{"policy_key": "ExactKeyFromList"}}
+If the question could apply to multiple policies, pick the single most relevant one."""
+    response_select = llm.invoke([HumanMessage(content=prompt_select)])
+    try:
+        content = response_select.content.strip()
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        result = json.loads(content)
+        policy_key = result.get("policy_key") or ""
+    except Exception:
+        policy_key = policy_names[0] if policy_names else ""
+    if policy_key not in HR_POLICIES:
+        policy_key = policy_names[0] if policy_names else ""
+    doc_text = HR_POLICIES[policy_key]
+    state["llm_calls"] = state.get("llm_calls", 0) + 1
+    prompt_answer = f"""Answer the user's question using ONLY the following policy document. Do not use other knowledge.
+If the document does not contain the answer, say so briefly.
+
+Policy document ({policy_key}):
+---
+{doc_text}
+---
+
+User question: {state['user_message']}
+
+Give a concise, accurate answer based only on the document above."""
+    response_answer = llm.invoke([HumanMessage(content=prompt_answer)])
+    answer = (response_answer.content or "").strip()
+    state["db_result"] = {"message": answer, "source_policy": policy_key}
+    return state
+
+
 def handle_complex(state: HelpServiceState) -> HelpServiceState:
     state["llm_calls"] = state.get("llm_calls", 0) + 1
     state["mcp_calls"] = state.get("mcp_calls", 0) + 2
@@ -484,6 +541,7 @@ def build_graph():
     workflow.add_node("fetch_simple_data", fetch_simple_data)
     workflow.add_node("handle_update", handle_update)
     workflow.add_node("verify_update", verify_update)
+    workflow.add_node("rag_policy", rag_policy)
     workflow.add_node("handle_complex", handle_complex)
     workflow.add_node("format_response", format_response)
     workflow.set_entry_point("validate_user")
@@ -495,11 +553,12 @@ def build_graph():
     workflow.add_conditional_edges(
         "classify_issue", route_issue,
         {"fetch_simple_data": "fetch_simple_data", "handle_update": "handle_update",
-         "handle_complex": "handle_complex", "format_response": "format_response"}
+         "handle_complex": "handle_complex", "rag_policy": "rag_policy", "format_response": "format_response"}
     )
     workflow.add_edge("fetch_simple_data", "format_response")
     workflow.add_edge("handle_update", "verify_update")
     workflow.add_edge("verify_update", "format_response")
+    workflow.add_edge("rag_policy", "format_response")
     workflow.add_edge("handle_complex", "format_response")
     workflow.add_edge("format_response", END)
     graph = workflow.compile()
